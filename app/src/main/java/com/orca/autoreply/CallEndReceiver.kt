@@ -70,6 +70,10 @@ class CallEndReceiver : BroadcastReceiver() {
             AppLog.d(context, "skip: ${status.key} is disabled")
             return
         }
+        if (settings.isDndActive()) {
+            AppLog.d(context, "skip: do not disturb (${settings.dndSummary()})")
+            return
+        }
         if (e.number.count { it.isDigit() } < 3) { // private/unknown numbers
             AppLog.d(context, "skip: no usable number")
             return

@@ -36,7 +36,7 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
 
-    private enum class Screen { LIST, PICKER, EDITOR }
+    private enum class Screen { LIST, PICKER, EDITOR, DND }
 
     private lateinit var settings: ReplySettings
     private lateinit var content: FrameLayout
@@ -82,7 +82,7 @@ class MainActivity : ComponentActivity() {
     private fun handleBack() {
         when (screen) {
             Screen.LIST -> finish()
-            Screen.PICKER -> showList()
+            Screen.PICKER, Screen.DND -> showList()
             Screen.EDITOR -> if (dirty) confirmDiscard() else showList()
         }
     }
@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
 
         val bar = row()
         bar.addView(label("통화 후 자동 문자", 22f, Colors.TEXT, true), lp(w = 0, weight = 1f))
-        bar.addView(iconButton(R.drawable.ic_log, "로그 파일 내보내기") { exportLog() })
+        if (SHOW_LOG_EXPORT) bar.addView(iconButton(R.drawable.ic_log, "로그 파일 내보내기") { exportLog() })
         col.addView(bar, lp())
 
         // Power button: tap to turn auto-send on/off.
@@ -151,8 +151,20 @@ class MainActivity : ComponentActivity() {
         val permOk = allPermissionsGranted()
         val battOk = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
         tiles.addView(tile(permOk, "권한", if (permOk) "허용됨" else "눌러서 허용") { requestPermissions() }, tileLp(false))
-        tiles.addView(tile(battOk, "배터리", if (battOk) "제외됨" else "눌러서 설정") { requestIgnoreBatteryOptimizations() }, tileLp(false))
-        tiles.addView(tile(null, "로그", "내보내기") { exportLog() }, tileLp(true))
+        tiles.addView(
+            tile(battOk, "배터리", if (battOk) "제외됨" else "눌러서 설정") { requestIgnoreBatteryOptimizations() },
+            tileLp(false),
+        )
+        val dndOn = settings.dndEnabled
+        tiles.addView(
+            tile(
+                R.drawable.ic_moon,
+                if (dndOn) Colors.ACCENT else Colors.NEUTRAL_BG,
+                if (dndOn) Colors.ON_ACCENT else Colors.NEUTRAL_FG,
+                "방해금지", dndTileText(),
+            ) { showDnd() },
+            tileLp(true),
+        )
         col.addView(tiles, lp(top = 24))
 
         // Registered messages.
@@ -193,16 +205,16 @@ class MainActivity : ComponentActivity() {
             if (!last) marginEnd = dp(8)
         }
 
-    /** ok = true: green check, false: amber alert, null: neutral log icon. */
-    private fun tile(ok: Boolean?, title: String, sub: String, onClick: () -> Unit): LinearLayout =
+    /** Readiness tile: green check when ok, amber alert otherwise. */
+    private fun tile(ok: Boolean, title: String, sub: String, onClick: () -> Unit): LinearLayout =
+        if (ok) tile(R.drawable.ic_check, Colors.GREEN_BG, Colors.GREEN_FG, title, sub, onClick)
+        else tile(R.drawable.ic_alert, Colors.AMBER_BG, Colors.AMBER_FG, title, sub, onClick)
+
+    private fun tile(icon: Int, bg: Int, fg: Int, title: String, sub: String, onClick: () -> Unit): LinearLayout =
         card(12).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
             isClickable = true
             isFocusable = true
-            val (icon, bg, fg) = when (ok) {
-                true -> Triple(R.drawable.ic_check, Colors.GREEN_BG, Colors.GREEN_FG)
-                false -> Triple(R.drawable.ic_alert, Colors.AMBER_BG, Colors.AMBER_FG)
-                null -> Triple(R.drawable.ic_log, Colors.NEUTRAL_BG, Colors.NEUTRAL_FG)
-            }
             addView(
                 FrameLayout(this@MainActivity).apply {
                     background = ovalBg(bg)
@@ -216,8 +228,8 @@ class MainActivity : ComponentActivity() {
                 },
                 LinearLayout.LayoutParams(dp(32), dp(32)),
             )
-            addView(label(title, 13f, Colors.TEXT, true), lp(top = 6))
-            addView(label(sub, 12f, Colors.MUTED), lp(top = 2))
+            addView(label(title, 13f, Colors.TEXT, true).apply { gravity = Gravity.CENTER }, lp(top = 6))
+            addView(label(sub, 12f, Colors.MUTED).apply { gravity = Gravity.CENTER }, lp(top = 2))
             setOnClickListener { onClick() }
         }
 
@@ -256,6 +268,132 @@ class MainActivity : ComponentActivity() {
         settings.masterEnabled = turningOn
         if (turningOn && !allPermissionsGranted()) requestPermissions()
         showList()
+    }
+
+    // ───────────────────────── 방해금지 ─────────────────────────
+
+    private fun fmtTime(min: Int) = "%02d:%02d".format(min / 60, min % 60)
+
+    private fun dndTileText() = when {
+        !settings.dndEnabled -> "꺼짐"
+        settings.isDndActive() -> "지금 적용 중"
+        settings.dndAllDay -> "종일"
+        else -> "${fmtTime(settings.dndStart)}~${fmtTime(settings.dndEnd)}"
+    }
+
+    /** Changes here are saved immediately (no save button). */
+    private fun showDnd() {
+        screen = Screen.DND
+        val col = column().apply { setPadding(dp(16), dp(24), dp(16), dp(32)) }
+        val head = row()
+        head.addView(iconButton(R.drawable.ic_back, "뒤로") { showList() })
+        head.addView(label("방해금지", 20f, Colors.TEXT, true), lp(w = 0, weight = 1f).apply { marginStart = dp(12) })
+        col.addView(head, lp())
+        col.addView(
+            label("정한 요일과 시간에는 자동 전송이 켜져 있어도 문자를 보내지 않습니다. 변경 사항은 바로 저장됩니다.", 14f, Colors.MUTED),
+            lp(top = 12),
+        )
+
+        val body = column()
+        val statusText = label("", 13f, Colors.MUTED)
+        fun refreshStatus() {
+            statusText.text = if (!settings.dndEnabled) {
+                "방해금지가 꺼져 있습니다"
+            } else {
+                settings.dndSummary() + " · " + if (settings.isDndActive()) "지금 적용 중" else "지금은 적용되지 않음"
+            }
+        }
+
+        val enableCard = row().apply {
+            background = roundBg(Colors.SURFACE, 16, Colors.BORDER)
+            setPadding(dp(16), dp(8), dp(12), dp(8))
+        }
+        enableCard.addView(label("방해금지 사용", 15f, Colors.TEXT, true), lp(w = 0, weight = 1f))
+        enableCard.addView(appSwitch(settings.dndEnabled, "방해금지 사용") {
+            settings.dndEnabled = it
+            body.alpha = if (it) 1f else 0.4f
+            refreshStatus()
+        })
+        col.addView(enableCard, lp(top = 16))
+        col.addView(statusText, lp(top = 10))
+
+        // Weekdays (Mon … Sun).
+        body.addView(label("요일", 14f, Colors.TEXT, true))
+        val chips = row()
+        listOf("월", "화", "수", "목", "금", "토", "일").forEachIndexed { i, name ->
+            val chip = label(name, 14f, Colors.BODY, true).apply {
+                gravity = Gravity.CENTER
+                isClickable = true
+                isFocusable = true
+                contentDescription = "${name}요일"
+            }
+            fun paint() {
+                val selected = (settings.dndDays and (1 shl i)) != 0
+                chip.background = roundBg(if (selected) Colors.ACCENT else Colors.CHIP, 12)
+                chip.setTextColor(if (selected) Colors.ON_ACCENT else Colors.BODY)
+            }
+            paint()
+            chip.setOnClickListener {
+                settings.dndDays = settings.dndDays xor (1 shl i)
+                paint()
+                refreshStatus()
+            }
+            chips.addView(chip, lp(w = 0, h = dp(44), weight = 1f).apply { if (i > 0) marginStart = dp(6) })
+        }
+        body.addView(chips, lp(top = 8))
+
+        // Time window (hidden when "하루 종일" is on).
+        val timeBox = row().apply { gravity = Gravity.NO_GRAVITY }
+        fun timeCard(title: String, get: () -> Int, set: (Int) -> Unit): LinearLayout {
+            val value = label(fmtTime(get()), 22f, Colors.TEXT, true)
+            return card(14).apply {
+                isClickable = true
+                isFocusable = true
+                addView(label(title, 12f, Colors.MUTED, true))
+                addView(value, lp(top = 4))
+                setOnClickListener {
+                    android.app.TimePickerDialog(
+                        this@MainActivity,
+                        { _, h, m ->
+                            set(h * 60 + m)
+                            value.text = fmtTime(get())
+                            refreshStatus()
+                        },
+                        get() / 60, get() % 60, true,
+                    ).show()
+                }
+            }
+        }
+        timeBox.addView(
+            timeCard("시작", { settings.dndStart }, { settings.dndStart = it }),
+            lp(w = 0, weight = 1f).apply { marginEnd = dp(8) },
+        )
+        timeBox.addView(timeCard("종료", { settings.dndEnd }, { settings.dndEnd = it }), lp(w = 0, weight = 1f))
+        val timeHint = label("종료 시각이 시작보다 빠르면 다음 날까지 이어집니다. 예: 22:00 ~ 08:00", 12f, Colors.MUTED)
+        fun showTime(allDay: Boolean) {
+            timeBox.visibility = if (allDay) View.GONE else View.VISIBLE
+            timeHint.visibility = if (allDay) View.GONE else View.VISIBLE
+        }
+
+        val allDayCard = row().apply {
+            background = roundBg(Colors.SURFACE, 16, Colors.BORDER)
+            setPadding(dp(16), dp(8), dp(12), dp(8))
+        }
+        allDayCard.addView(label("하루 종일", 15f, Colors.TEXT, true), lp(w = 0, weight = 1f))
+        allDayCard.addView(appSwitch(settings.dndAllDay, "하루 종일") {
+            settings.dndAllDay = it
+            showTime(it)
+            refreshStatus()
+        })
+        body.addView(allDayCard, lp(top = 16))
+        body.addView(timeBox, lp(top = 12))
+        body.addView(timeHint, lp(top = 8))
+        showTime(settings.dndAllDay)
+
+        body.alpha = if (settings.dndEnabled) 1f else 0.4f
+        col.addView(body, lp(top = 20))
+        refreshStatus()
+        show(ScrollView(this).apply { addView(col) })
     }
 
     // ───────────────────────── 2. 템플릿 선택 ─────────────────────────
@@ -619,6 +757,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
+        // Log export buttons are hidden in release-style builds; set to true for test builds.
+        const val SHOW_LOG_EXPORT = false
+
         // KT/SKT MMS size limit is ~300KB per message; leave room for text and headers.
         const val MAX_IMAGE_BYTES = 250 * 1024
     }

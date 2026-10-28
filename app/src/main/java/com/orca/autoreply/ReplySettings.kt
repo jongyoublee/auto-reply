@@ -2,6 +2,7 @@ package com.orca.autoreply
 
 import android.content.Context
 import java.io.File
+import java.util.Calendar
 
 enum class CallStatus(
     val key: String,
@@ -63,6 +64,66 @@ class ReplySettings(context: Context) {
     var hadCall: Boolean
         get() = prefs.getBoolean("had_call", false)
         set(v) = prefs.edit().putBoolean("had_call", v).apply()
+
+    // ── 방해금지: no messages are sent on the chosen weekdays/time window. ──
+    // dndDays bit 0 = Monday … bit 6 = Sunday; times are minutes since 00:00.
+
+    var dndEnabled: Boolean
+        get() = prefs.getBoolean("dnd_enabled", false)
+        set(v) = prefs.edit().putBoolean("dnd_enabled", v).apply()
+
+    var dndAllDay: Boolean
+        get() = prefs.getBoolean("dnd_all_day", false)
+        set(v) = prefs.edit().putBoolean("dnd_all_day", v).apply()
+
+    var dndDays: Int
+        get() = prefs.getInt("dnd_days", 0x7F)
+        set(v) = prefs.edit().putInt("dnd_days", v and 0x7F).apply()
+
+    var dndStart: Int
+        get() = prefs.getInt("dnd_start", 22 * 60)
+        set(v) = prefs.edit().putInt("dnd_start", v).apply()
+
+    var dndEnd: Int
+        get() = prefs.getInt("dnd_end", 8 * 60)
+        set(v) = prefs.edit().putInt("dnd_end", v).apply()
+
+    /** True while "now" falls inside the do-not-disturb schedule. */
+    fun isDndActive(now: Calendar = Calendar.getInstance()): Boolean {
+        if (!dndEnabled) return false
+        val today = (now.get(Calendar.DAY_OF_WEEK) + 5) % 7 // Mon=0 … Sun=6
+        val yesterday = (today + 6) % 7
+        val days = dndDays
+        fun on(d: Int) = (days and (1 shl d)) != 0
+        if (dndAllDay) return on(today)
+        val minute = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+        val s = dndStart
+        val e = dndEnd
+        return when {
+            s == e -> on(today) // identical start/end: treat as the whole day
+            s < e -> on(today) && minute >= s && minute < e
+            // Overnight window: the day it starts on is the one that counts.
+            else -> (on(today) && minute >= s) || (on(yesterday) && minute < e)
+        }
+    }
+
+    fun dndDaysLabel(): String = when (dndDays and 0x7F) {
+        0x7F -> "매일"
+        0b0011111 -> "평일"
+        0b1100000 -> "주말"
+        0 -> "요일 없음"
+        else -> listOf("월", "화", "수", "목", "금", "토", "일")
+            .filterIndexed { i, _ -> (dndDays and (1 shl i)) != 0 }
+            .joinToString("·")
+    }
+
+    fun dndSummary(): String {
+        val days = dndDaysLabel()
+        if (dndAllDay) return "$days 종일"
+        fun t(m: Int) = "%02d:%02d".format(m / 60, m % 60)
+        val overnight = dndStart >= dndEnd
+        return "$days ${t(dndStart)} ~ ${if (overnight) "다음 날 " else ""}${t(dndEnd)}"
+    }
 
     var lastHandledLogId: Long
         get() = prefs.getLong("last_log_id", 0L)
