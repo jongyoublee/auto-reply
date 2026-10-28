@@ -66,7 +66,7 @@ class CallEndReceiver : BroadcastReceiver() {
             }
         }
         AppLog.d(context, "call ended: id=${e.id} number=${AppLog.mask(e.number)} type=${e.type} duration=${e.duration}s -> ${status.key}")
-        if (!settings.enabled(status)) {
+        if (!settings.active(status)) {
             AppLog.d(context, "skip: ${status.key} is disabled")
             return
         }
