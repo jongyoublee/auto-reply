@@ -4,14 +4,9 @@ import java.io.ByteArrayOutputStream
 
 /**
  * Minimal m-send-req encoder (OMA MMS 1.x / WSP) for SmsManager.sendMultimediaMessage.
- *
- * Korean carriers (KT, SKT) and the stock Samsung/Google messaging apps all use
- * multipart/related with a SMIL layout part, so that is the default. Set USE_SMIL to false
- * to fall back to a plain multipart/mixed body if a carrier rejects the SMIL variant.
+ * Uses multipart/related with a SMIL layout part, as Korean carriers and stock messaging apps do.
  */
 object MmsBuilder {
-    const val USE_SMIL = true
-
     private const val SMIL_ID = "<smil>"
     private const val IMAGE_NAME = "image.jpg"
     private const val TEXT_NAME = "text.txt"
@@ -24,23 +19,21 @@ object MmsBuilder {
         out.write(0x89); out.write(0x01); out.write(0x81)           // From: insert-address-token
         out.write(0x97); str(out, "${number.filter { it.isDigit() || it == '+' }}/TYPE=PLMN") // To
 
-        // Content-Type: multipart/related; type="application/smil"; start="<smil>"  (or multipart/mixed)
+        // Content-Type: multipart/related; type="application/smil"; start="<smil>"
         out.write(0x84)
-        if (USE_SMIL) {
+        run {
             val ct = ByteArrayOutputStream().apply {
                 write(0xB3)                                          // application/vnd.wap.multipart.related
                 write(0x89); str(this, "application/smil")           // type
                 write(0x99); str(this, SMIL_ID)                      // start
             }.toByteArray()
             out.write(ct.size); out.write(ct)
-        } else {
-            out.write(0xA3)                                          // application/vnd.wap.multipart.mixed
         }
 
         val hasText = text.isNotBlank()
         val parts = ArrayList<Pair<ByteArray, ByteArray>>()
 
-        if (USE_SMIL) {
+        run {
             val headers = ByteArrayOutputStream().apply {
                 str(this, "application/smil")
                 write(0xC0); write(0x22); str(this, SMIL_ID)         // Content-ID

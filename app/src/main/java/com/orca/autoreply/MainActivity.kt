@@ -36,7 +36,7 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
 
-    private enum class Screen { LIST, PICKER, EDITOR, DND }
+    private enum class Screen { LIST, PICKER, EDITOR, DND, HISTORY }
 
     private lateinit var settings: ReplySettings
     private lateinit var content: FrameLayout
@@ -82,7 +82,7 @@ class MainActivity : ComponentActivity() {
     private fun handleBack() {
         when (screen) {
             Screen.LIST -> finish()
-            Screen.PICKER, Screen.DND -> showList()
+            Screen.PICKER, Screen.DND, Screen.HISTORY -> showList()
             Screen.EDITOR -> if (dirty) confirmDiscard() else showList()
         }
     }
@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
 
         val bar = row()
         bar.addView(label("통화 후 자동 문자", 22f, Colors.TEXT, true), lp(w = 0, weight = 1f))
-        if (SHOW_LOG_EXPORT) bar.addView(iconButton(R.drawable.ic_log, "로그 파일 내보내기") { exportLog() })
+        bar.addView(iconButton(R.drawable.ic_log, "송신 내역") { showHistory() })
         col.addView(bar, lp())
 
         // Power button: tap to turn auto-send on/off.
@@ -268,6 +268,53 @@ class MainActivity : ComponentActivity() {
         settings.masterEnabled = turningOn
         if (turningOn && !allPermissionsGranted()) requestPermissions()
         showList()
+    }
+
+    // ───────────────────────── 송신 내역 ─────────────────────────
+
+    private fun showHistory() {
+        screen = Screen.HISTORY
+        val col = column().apply { setPadding(dp(16), dp(24), dp(16), dp(32)) }
+        val head = row()
+        head.addView(iconButton(R.drawable.ic_back, "뒤로") { showList() })
+        head.addView(label("송신 내역", 20f, Colors.TEXT, true), lp(w = 0, weight = 1f).apply { marginStart = dp(12) })
+        if (SendLog.all(this).isNotEmpty()) {
+            head.addView(iconButton(R.drawable.ic_trash, "내역 지우기") {
+                AlertDialog.Builder(this)
+                    .setMessage("송신 내역을 모두 지울까요? 지우면 오늘 보낸 번호에도 다시 문자가 갈 수 있습니다.")
+                    .setPositiveButton("지우기") { _, _ -> SendLog.clear(this); showHistory() }
+                    .setNegativeButton("취소", null)
+                    .show()
+            })
+        }
+        col.addView(head, lp())
+        col.addView(
+            label("같은 번호에는 항목별로 하루에 한 번만 보냅니다.", 14f, Colors.MUTED),
+            lp(top = 12),
+        )
+        val entries = SendLog.all(this)
+        if (entries.isEmpty()) {
+            col.addView(label("아직 보낸 문자가 없습니다", 15f, Colors.MUTED).apply { gravity = Gravity.CENTER }, lp(top = 40))
+        }
+        val fmt = java.text.SimpleDateFormat("M월 d일 HH:mm", java.util.Locale.KOREA)
+        entries.forEach { e ->
+            val card = row().apply {
+                background = roundBg(Colors.CARD, 16, Colors.BORDER)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+            }
+            card.addView(statusBadge(e.status, 40), LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(12) })
+            val t = column()
+            t.addView(label(e.number, 15f, Colors.TEXT, true))
+            t.addView(label("${e.status.label} · ${fmt.format(java.util.Date(e.time))}", 12f, Colors.MUTED), lp(top = 2))
+            val body = e.message.ifBlank { "(문구 없음)" } + if (e.hasImage) "  · 이미지" else ""
+            t.addView(label(body, 13f, Colors.BODY).apply {
+                maxLines = 3
+                ellipsize = TextUtils.TruncateAt.END
+            }, lp(top = 6))
+            card.addView(t, lp(w = 0, weight = 1f))
+            col.addView(card, lp(top = 10))
+        }
+        show(ScrollView(this).apply { addView(col) })
     }
 
     // ───────────────────────── 방해금지 ─────────────────────────
@@ -740,26 +787,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun exportLog() {
-        val file = AppLog.file(this)
-        if (!file.exists() || file.length() == 0L) {
-            toast("기록된 로그가 없습니다")
-            return
-        }
-        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "AutoReply 로그")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        startActivity(Intent.createChooser(send, "로그 파일 보내기"))
-    }
-
     private companion object {
-        // Log export buttons are hidden in release-style builds; set to true for test builds.
-        const val SHOW_LOG_EXPORT = false
-
         // KT/SKT MMS size limit is ~300KB per message; leave room for text and headers.
         const val MAX_IMAGE_BYTES = 250 * 1024
     }

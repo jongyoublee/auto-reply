@@ -19,9 +19,16 @@ object Sender {
         val settings = ReplySettings(context)
         val text = settings.message(status)
         val image = settings.imageFile(status).takeIf { it.exists() }
-        when {
-            image != null -> sendMms(context, number, text, image, status)
-            text.isNotBlank() -> sendSms(context, number, text)
+        if (image == null && text.isBlank()) return
+        if (!SendLog.tryRecord(context, number, status, text, image != null)) {
+            AppLog.d(context, "skip: already sent ${status.key} to ${AppLog.mask(number)} today")
+            return
+        }
+        try {
+            if (image != null) sendMms(context, number, text, image, status) else sendSms(context, number, text)
+        } catch (e: Exception) {
+            AppLog.w(context, "send failed", e)
+            SendLog.undoLast(context) // don't block a retry today for a message that never left
         }
     }
 
@@ -53,7 +60,7 @@ object Sender {
                 context, System.currentTimeMillis().toInt(), resultIntent,
                 PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE,
             )
-            AppLog.d(context, "sendMms to=${AppLog.mask(number)} status=${status.key} pdu=${pdu.length()}B smil=${MmsBuilder.USE_SMIL}")
+            AppLog.d(context, "sendMms to=${AppLog.mask(number)} status=${status.key} pdu=${pdu.length()}B")
             smsManager(context).sendMultimediaMessage(context, uri, null, null, sent)
         } catch (e: Exception) {
             AppLog.w(context, "sendMms failed, falling back to notification", e)
